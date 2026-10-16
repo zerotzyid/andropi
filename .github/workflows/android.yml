@@ -1,0 +1,74 @@
+name: Build AndroPI APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  FLUTTER_CHANNEL: stable
+  FLUTTER_VERSION: 3.22.2
+  NODE_VERSION: 20
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install Python deps
+        run: pip install lief
+
+      - name: Bundle native runtime (jniLibs)
+        run: python tool/bundle_runtime.py armeabi-v7a arm64-v8a x86_64
+
+      - name: Build agent host
+        run: |
+          cd agent
+          npm ci
+          node build.mjs
+          cd ..
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build APK (full flavor, split per ABI)
+        run: flutter build apk --flavor full --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: andropi-apk
+          path: |
+            build/app/outputs/flutter-apk/app-full-release-*.apk
+          retention-days: 7
