@@ -42,11 +42,15 @@ const dropFile = (name) =>
 function prune(dir) {
 	for (const name of readdirSync(dir)) {
 		const path = join(dir, name);
-		if (statSync(path).isDirectory()) {
-			if (dropDirs.has(name)) rmSync(path, { recursive: true, force: true });
-			else prune(path);
-		} else if (dropFile(name)) {
-			rmSync(path);
+		try {
+			if (statSync(path).isDirectory()) {
+				if (dropDirs.has(name)) rmSync(path, { recursive: true, force: true });
+				else prune(path);
+			} else if (dropFile(name)) {
+				rmSync(path);
+			}
+		} catch {
+			// Broken symlink or missing target: skip.
 		}
 	}
 }
@@ -64,8 +68,13 @@ let after = 0;
 function minify(dir) {
 	for (const name of readdirSync(dir)) {
 		const path = join(dir, name);
-		if (statSync(path).isDirectory()) {
-			minify(path);
+		try {
+			if (statSync(path).isDirectory()) {
+				minify(path);
+				continue;
+			}
+		} catch {
+			// Broken symlink or missing target: skip.
 			continue;
 		}
 		const isScript = /\.(m|c)?js$/.test(name);

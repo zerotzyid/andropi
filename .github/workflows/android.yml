@@ -10,7 +10,7 @@ on:
 env:
   FLUTTER_CHANNEL: stable
   FLUTTER_VERSION: 3.22.2
-  NODE_VERSION: 20
+  NODE_VERSION: 22
 
 jobs:
   build:
