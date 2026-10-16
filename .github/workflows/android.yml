@@ -65,10 +65,12 @@ jobs:
       - name: Build APK (full flavor, split per ABI)
         run: flutter build apk --flavor full --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
 
+      - name: List APK output
+        run: find build/app -name "*.apk" -type f 2>/dev/null || true
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: andropi-apk
-          path: |
-            build/app/outputs/flutter-apk/app-full-release-*.apk
+          path: '**/*.apk'
           retention-days: 7
