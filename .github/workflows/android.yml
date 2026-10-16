@@ -9,7 +9,6 @@ on:
 
 env:
   FLUTTER_CHANNEL: stable
-  FLUTTER_VERSION: 3.22.2
   NODE_VERSION: 22
 
 jobs:
@@ -34,7 +33,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
-          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
