@@ -69,11 +69,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               for (final pr in others) _ProviderTile(provider: pr, agent: agent),
               const _Header("Custom providers"),
-              if (agent.integrations.publicSettings().customProviders.isEmpty)
-                Padding
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              if (agent.integrations.customProviders.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                   child: Text("No custom providers configured.", style: text.bodySmall),
-              for (final cp in agent.integrations.publicSettings().customProviders)
+                ),
+              for (final cp in agent.integrations.customProviders)
                 _CustomProviderTile(provider: cp, agent: agent),
 
               const _Header('Environment'),
