@@ -112,7 +112,7 @@ class Integrations extends ChangeNotifier {
   List<SshHost> hosts = const [];
   List<ProjectInfo> projects = const [];
   bool loaded = false;
-  List<Map<String, dynamic>>? customProviders;
+  List<Map<String, dynamic>> customProviders = const [];
   void _apply(dynamic summary) {
     final s = (summary as Map).cast<String, dynamic>();
     final gh = s['github'];
