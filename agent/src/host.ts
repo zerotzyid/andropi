@@ -340,24 +340,74 @@ async function providers() {
 			oauth: modelRuntime.isUsingOAuth(p.id),
 			methods: [auth.apiKey?.login ? "api_key" : null, auth.oauth ? "oauth" : null].filter(Boolean),
 			models: modelRuntime.getModels(p.id).length,
+			custom: integrations.customProviders().some((cp) => cp.provider === p.id),
 		});
 	}
-	// Add custom providers from integrations settings
-	const customProviders = integrations.publicSettings().customProviders;
-	if (customProviders) {
-		for (const cp of customProviders) {
-			out.push({
-				id: cp.provider,
-				name: cp.provider,
-				configured: true,
-				oauth: false,
-				methods: ['api_key'],
-				models: cp.models.length,
-				custom: true,
-			});
-		}
-	}
 	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Custom providers: user endpoints speaking a pi-supported API.
+
+/** Ids currently registered with pi, so edits and deletions can be applied. */
+let registeredCustomProviders: string[] = [];
+
+function customProviderConfig(cp: any, index: number) {
+	const id = String(cp.provider ?? "").trim();
+	if (!id) throw new Error(`Custom provider ${index + 1}: provider ID is missing`);
+	const baseUrl = String(cp.baseUrl ?? "").trim().replace(/\/+$/, "");
+	if (!/^https?:\/\/\S+$/i.test(baseUrl)) {
+		throw new Error(`Custom provider "${id}": set a base URL starting with http:// or https://`);
+	}
+	const models = (Array.isArray(cp.models) ? cp.models : []).map((model: any) => String(model).trim()).filter(Boolean);
+	if (!models.length) throw new Error(`Custom provider "${id}": add at least one model ID`);
+	const contextWindow = Number(cp.contextWindow) > 0 ? Math.round(Number(cp.contextWindow)) : 128000;
+	const maxTokens = Number(cp.maxTokens) > 0 ? Math.round(Number(cp.maxTokens)) : 8192;
+	const input = cp.vision ? ["text", "image"] : ["text"];
+	return {
+		id,
+		config: {
+			name: String(cp.name ?? "").trim() || id,
+			baseUrl,
+			apiKey: String(cp.apiKey ?? ""),
+			api: String(cp.api ?? "openai-completions"),
+			models: models.map((model: string) => ({
+				type: "chat",
+				id: model,
+				name: model,
+				reasoning: !!cp.reasoning,
+				input,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow,
+				maxTokens,
+			})),
+		} as any,
+	};
+}
+
+/** Registers every stored custom provider, drops removed ones, and returns problems. */
+function applyCustomProviders(): string[] {
+	const list = integrations.customProviders();
+	const wanted = new Set<string>();
+	const errors: string[] = [];
+	list.forEach((cp, index) => {
+		try {
+			const { id, config } = customProviderConfig(cp, index);
+			modelRuntime.registerProvider(id, config);
+			wanted.add(id);
+		} catch (e) {
+			errors.push(String((e as Error)?.message ?? e));
+		}
+	});
+	for (const id of registeredCustomProviders) {
+		if (!wanted.has(id)) modelRuntime.unregisterProvider(id);
+	}
+	registeredCustomProviders = [...wanted];
+	return errors;
+}
+
+function logCustomProviderErrors(errors: string[]) {
+	for (const error of errors) log("custom providers:", error);
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +559,26 @@ async function handle(cmd: Command): Promise<unknown> {
 		case "logout":
 			await modelRuntime.logout(cmd.provider);
 			return providers();
+
+		case "custom_provider_save": {
+			const input = cmd.provider ?? {};
+			const id = String(input.provider ?? input.id ?? "").trim();
+			const out = integrations.saveCustomProvider(input);
+			const errors = applyCustomProviders();
+			if (!registeredCustomProviders.includes(id)) {
+				// Do not leave a provider behind that pi refused to register.
+				integrations.deleteCustomProvider(id);
+				applyCustomProviders();
+				throw new Error(errors.find((e) => e.includes(id)) ?? errors[0] ?? `Could not register "${id}"`);
+			}
+			logCustomProviderErrors(errors);
+			return out;
+		}
+		case "custom_provider_delete": {
+			const out = integrations.deleteCustomProvider(cmd.providerId);
+			logCustomProviderErrors(applyCustomProviders());
+			return out;
+		}
 
 		case "new_session":
 			return openSession(SessionManager.create(cmd.cwd ?? workspace));
@@ -762,6 +832,7 @@ async function handle(cmd: Command): Promise<unknown> {
 			const out = integrations.updateSettings(cmd.settings ?? {});
 			container.setNameservers(integrations.settings.dns);
 			guard.mode = integrations.settings.approvalMode ?? "ask_risky";
+			if (cmd.settings?.customProviders !== undefined) logCustomProviderErrors(applyCustomProviders());
 			return out;
 		}
 
@@ -832,6 +903,8 @@ async function main() {
 	container = new Container(process.env.ANDROPI_FILES ?? join(agentDir, "..", "..", ".."));
 	mcp = new Mcp(join(stateDir, "mcp.json"), () => send({ type: "mcp", servers: mcp.summary() }));
 	modelRuntime = await ModelRuntime.create();
+	// User-supplied endpoints must be registered before the first session is built.
+	logCustomProviderErrors(applyCustomProviders());
 	settingsManager = SettingsManager.create(workspace, agentDir);
 	// Linux container is the agent's shell by default once installed.
 	if (

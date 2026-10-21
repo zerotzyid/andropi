@@ -30,6 +30,22 @@ interface Store {
 	settings?: AppSettings;
 }
 
+/** A user-supplied endpoint that speaks one of pi's supported model APIs. */
+export interface CustomProvider {
+	/** Provider id used in sessions, e.g. "my-gateway". */
+	provider: string;
+	name: string;
+	baseUrl: string;
+	/** pi API implementation, e.g. "openai-completions". */
+	api: string;
+	apiKey: string;
+	models: string[];
+	contextWindow: number;
+	maxTokens: number;
+	reasoning: boolean;
+	vision: boolean;
+}
+
 export interface AppSettings {
 	dns: DnsMode;
 	dnsUrl?: string;
@@ -41,12 +57,66 @@ export interface AppSettings {
 	approvalMode?: "ask_all" | "ask_risky" | "auto";
 	/** Tried in order when the current model errors out (rate limits, outages). */
 	fallbackModels?: { provider: string; model: string }[];
+	/** User-supplied endpoints, registered with pi at startup. */
+	customProviders?: CustomProvider[];
 	/** Daily spend cap in USD; prompts are refused once reached. 0 or unset = none. */
-		customProviders?: { provider: string; apiKey: string; models: string[] }[];
 	dailyBudget?: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = { dns: "cloudflare", customProviders: [] };
+
+const CUSTOM_APIS = new Set([
+	"openai-completions",
+	"openai-responses",
+	"anthropic-messages",
+	"google-generative-ai",
+	"mistral-conversations",
+]);
+
+function positiveInt(value: unknown, fallback: number): number {
+	const n = Number(value);
+	return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+}
+
+/** Validates and fills defaults; an edit keeps the previous API key when none is supplied. */
+export function normalizeCustomProvider(input: any, previous?: CustomProvider): CustomProvider {
+	const provider = String(input?.provider ?? input?.id ?? previous?.provider ?? "").trim();
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(provider)) {
+		throw new Error("Provider ID may only contain letters, numbers, dots, dashes and underscores");
+	}
+	const baseUrl = String(input?.baseUrl ?? previous?.baseUrl ?? "").trim().replace(/\/+$/, "");
+	if (!/^https?:\/\/\S+$/i.test(baseUrl)) throw new Error("Base URL must start with http:// or https://");
+	const api = String(input?.api ?? previous?.api ?? "openai-completions").trim();
+	if (!CUSTOM_APIS.has(api)) throw new Error(`Unsupported API: ${api}`);
+	const apiKey = String(input?.apiKey ?? "").trim() || previous?.apiKey || "";
+	if (!apiKey) throw new Error("API key is required");
+	const rawModels = input?.models ?? previous?.models ?? [];
+	const models = [
+		...new Set(
+			(Array.isArray(rawModels) ? rawModels : String(rawModels).split(/[\s,]+/))
+				.map((model) => String(model).trim())
+				.filter(Boolean),
+		),
+	];
+	if (!models.length) throw new Error("Add at least one model ID");
+	return {
+		provider,
+		name: String(input?.name ?? previous?.name ?? "").trim() || provider,
+		baseUrl,
+		api,
+		apiKey,
+		models,
+		contextWindow: positiveInt(input?.contextWindow ?? previous?.contextWindow, 128000),
+		maxTokens: positiveInt(input?.maxTokens ?? previous?.maxTokens, 8192),
+		reasoning: input?.reasoning ?? previous?.reasoning ?? false,
+		vision: input?.vision ?? previous?.vision ?? false,
+	};
+}
+
+/** Strips the key before anything leaves the host. */
+function publicCustomProviders(list: CustomProvider[] | undefined) {
+	return (list ?? []).map(({ apiKey, ...rest }) => ({ ...rest, hasKey: !!apiKey }));
+}
 
 /** Client ID of the AndroPI GitHub OAuth App (device flow enabled). Public by design; no secret is used. */
 const GITHUB_CLIENT_ID = process.env.ANDROPI_GITHUB_CLIENT_ID ?? "Ov23lidVAetnaasSTbSU";
@@ -100,7 +170,8 @@ export class Integrations {
 
 	/** Keys are write-only from the app's point of view: it only learns whether one is set. */
 	publicSettings() {
-		const { dns, dnsUrl, braveKey, tavilyKey, approvalMode, fallbackModels, dailyBudget } = this.settings;
+		const { dns, dnsUrl, braveKey, tavilyKey, approvalMode, fallbackModels, dailyBudget, customProviders } =
+			this.settings;
 		return {
 			dns,
 			dnsUrl: dnsUrl ?? null,
@@ -109,7 +180,7 @@ export class Integrations {
 			approvalMode: approvalMode ?? "ask_risky",
 			fallbackModels: fallbackModels ?? [],
 			dailyBudget: dailyBudget ?? 0,
-			customProviders: this.store.customProviders ?? DEFAULT_SETTINGS.customProviders,
+			customProviders: publicCustomProviders(customProviders),
 		};
 	}
 
@@ -157,7 +228,30 @@ export class Integrations {
 			github: github ? { login: github.login, name: github.name, avatarUrl: github.avatarUrl } : null,
 			vercel: vercel ? { username: vercel.username } : null,
 			ssh: { publicKey: existsSync(pub) ? readFileSync(pub, "utf8").trim() : null, hosts: sshHosts },
+			customProviders: publicCustomProviders(this.settings.customProviders),
 		};
+	}
+
+	/** The stored custom providers, including keys; for the host's registration only. */
+	customProviders() {
+		return this.settings.customProviders ?? [];
+	}
+
+	/** Adds or updates one endpoint. Omit apiKey when editing to keep the stored key. */
+	saveCustomProvider(input: any) {
+		const id = String(input?.provider ?? input?.id ?? "").trim();
+		const previous = this.customProviders().find((p) => p.provider === id);
+		const entry = normalizeCustomProvider(input, previous);
+		const list = this.customProviders().filter((p) => p.provider !== entry.provider);
+		list.push(entry);
+		this.updateSettings({ customProviders: list });
+		return this.summary();
+	}
+
+	deleteCustomProvider(providerId: string) {
+		const id = String(providerId ?? "").trim();
+		this.updateSettings({ customProviders: this.customProviders().filter((p) => p.provider !== id) });
+		return this.summary();
 	}
 
 	// -------------------------------------------------------------------------

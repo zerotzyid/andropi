@@ -3,6 +3,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../agent/agent_controller.dart';
 import '../agent/models.dart';
+import 'custom_provider_screen.dart';
 import 'login_flow.dart';
 import 'kit.dart';
 import 'theme.dart';
@@ -22,6 +23,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     widget.agent.refreshProviders();
+    widget.agent.integrations.refresh().catchError((_) {});
+  }
+
+  Future<void> _editCustomProvider(Map<String, dynamic>? provider) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => CustomProviderScreen(agent: widget.agent, provider: provider),
+      ),
+    );
+    if (saved == true && mounted) {
+      await widget.agent.refreshProviders();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(provider == null ? 'Custom provider added' : 'Custom provider updated')),
+      );
+    }
   }
 
   @override
@@ -29,13 +46,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final p = context.palette;
     final text = Theme.of(context).textTheme;
     return ListenableBuilder(
-      listenable: widget.agent,
+      listenable: Listenable.merge([widget.agent, widget.agent.integrations]),
       builder: (context, _) {
         final agent = widget.agent;
         final q = query.toLowerCase();
-        final connected = agent.providers.where((x) => x.configured).toList();
+        final connected = agent.providers.where((x) => x.configured && !x.custom).toList();
         final others = agent.providers
-            .where((x) => !x.configured && (q.isEmpty || x.name.toLowerCase().contains(q) || x.id.contains(q)))
+            .where((x) => !x.configured && !x.custom && (q.isEmpty || x.name.toLowerCase().contains(q) || x.id.contains(q)))
             .toList();
 
         return Scaffold(
@@ -75,7 +92,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Text("No custom providers configured.", style: text.bodySmall),
                 ),
               for (final cp in agent.integrations.customProviders)
-                _CustomProviderTile(provider: cp, agent: agent),
+                _CustomProviderTile(provider: cp, onTap: () => _editCustomProvider(cp)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: SurfaceCard(
+                  onTap: () => _editCustomProvider(null),
+                  padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+                  child: Row(
+                    children: [
+                      IconTile(icon: LucideIcons.plus, color: p.accent),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Add custom provider', style: text.titleSmall),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Connect any OpenAI, Anthropic or Google compatible endpoint.',
+                              style: text.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(LucideIcons.chevronRight, size: 18, color: p.faint),
+                    ],
+                  ),
+                ),
+              ),
 
               const _Header('Environment'),
               _InfoRow('pi', agent.info['version']?.toString() ?? '—'),
@@ -225,29 +269,27 @@ class _ProviderTile extends StatelessWidget {
 }
 
 class _CustomProviderTile extends StatelessWidget {
-  const _CustomProviderTile({required this.provider, required this.agent});
+  const _CustomProviderTile({required this.provider, required this.onTap});
   final Map<String, dynamic> provider;
-  final AgentController agent;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
     final text = Theme.of(context).textTheme;
+    final name = '${provider['name'] ?? provider['provider'] ?? 'Unknown'}';
+    final host = '${provider['baseUrl'] ?? ''}'.replaceFirst(RegExp(r'^https?://'), '');
+    final count = (provider['models'] as List?)?.length ?? 0;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Icon(LucideIcons.globe, size: 38, color: p.text),
-      title: Text(provider['provider'] ?? 'Unknown', style: text.titleSmall),
-      subtitle: Text('${provider['models']?.length ?? 0} models', style: text.bodySmall),
-      trailing: provider['configured'] == true ? Icon(LucideIcons.check, color: p.success) : Icon(LucideIcons.chevronRight, size: 18, color: p.faint),
-      onTap: () => _open(context),
-    );
-  }
-
-  void _open(BuildContext context) async {
-    // Show options for custom provider
-    final providerName = provider['provider'] ?? 'Custom';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$providerName custom provider selected')),
+      leading: BrandTile(id: '${provider['provider'] ?? name}', size: 38),
+      title: Text(name, style: text.titleSmall),
+      subtitle: Text(
+        [if (host.isNotEmpty) host, '$count model${count == 1 ? '' : 's'}'].join(' · '),
+        style: text.bodySmall,
+      ),
+      trailing: Icon(LucideIcons.chevronRight, size: 18, color: p.faint),
+      onTap: onTap,
     );
   }
 }

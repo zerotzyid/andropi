@@ -131,6 +131,16 @@ class Integrations extends ChangeNotifier {
     projects = list.map((e) => ProjectInfo((e as Map).cast<String, dynamic>())).toList();
     notifyListeners();
   }
+
+  /// Adds or updates an OpenAI/Anthropic/Google-compatible endpoint.
+  /// Leave `apiKey` empty when editing to keep the stored key.
+  Future<void> saveCustomProvider(Map<String, dynamic> provider) async {
+    _apply(await client.call('custom_provider_save', {'provider': provider}));
+  }
+
+  Future<void> deleteCustomProvider(String providerId) async {
+    _apply(await client.call('custom_provider_delete', {'providerId': providerId}));
+  }
   /// Runs a long command, forwarding its output lines to [onLine].
   Future<T> _task<T>(
     String type,

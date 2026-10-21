@@ -23,6 +23,7 @@ class ProviderInfo {
   bool get oauth => json['oauth'] == true;
   List<String> get methods => (json['methods'] as List? ?? const []).cast<String>();
   int get modelCount => json['models'] as int? ?? 0;
+  bool get custom => json['custom'] == true;
 }
 
 class SessionSummary {
