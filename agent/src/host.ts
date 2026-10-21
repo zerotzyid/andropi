@@ -342,6 +342,21 @@ async function providers() {
 			models: modelRuntime.getModels(p.id).length,
 		});
 	}
+	// Add custom providers from integrations settings
+	const customProviders = integrations.publicSettings().customProviders;
+	if (customProviders) {
+		for (const cp of customProviders) {
+			out.push({
+				id: cp.provider,
+				name: cp.provider,
+				configured: true,
+				oauth: false,
+				methods: ['api_key'],
+				models: cp.models.length,
+				custom: true,
+			});
+		}
+	}
 	return out;
 }
 

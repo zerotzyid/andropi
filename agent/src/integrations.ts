@@ -42,10 +42,11 @@ export interface AppSettings {
 	/** Tried in order when the current model errors out (rate limits, outages). */
 	fallbackModels?: { provider: string; model: string }[];
 	/** Daily spend cap in USD; prompts are refused once reached. 0 or unset = none. */
+		customProviders?: { provider: string; apiKey: string; models: string[] }[];
 	dailyBudget?: number;
 }
 
-const DEFAULT_SETTINGS: AppSettings = { dns: "cloudflare" };
+const DEFAULT_SETTINGS: AppSettings = { dns: "cloudflare", customProviders: [] };
 
 /** Client ID of the AndroPI GitHub OAuth App (device flow enabled). Public by design; no secret is used. */
 const GITHUB_CLIENT_ID = process.env.ANDROPI_GITHUB_CLIENT_ID ?? "Ov23lidVAetnaasSTbSU";
@@ -108,6 +109,7 @@ export class Integrations {
 			approvalMode: approvalMode ?? "ask_risky",
 			fallbackModels: fallbackModels ?? [],
 			dailyBudget: dailyBudget ?? 0,
+			customProviders: this.store.customProviders ?? DEFAULT_SETTINGS.customProviders,
 		};
 	}
 
