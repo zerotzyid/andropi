@@ -58,6 +58,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Scaffold(
           appBar: AppBar(
             title: const Text('Models & providers'),
+            actions: [
+              IconButton(
+                tooltip: 'Add custom provider',
+                onPressed: () => _editCustomProvider(null),
+                icon: const Icon(LucideIcons.plus),
+              ),
+            ],
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(1),
               child: Divider(height: 1, color: p.border),
@@ -73,18 +80,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Text('No providers yet. Pick one below.', style: text.bodySmall),
                 ),
               for (final pr in connected) _ProviderTile(provider: pr, agent: agent),
-              const _Header('Add provider'),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                child: TextField(
-                  onChanged: (v) => setState(() => query = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Search providers',
-                    prefixIcon: Icon(LucideIcons.search, size: 18),
-                  ),
-                ),
-              ),
-              for (final pr in others) _ProviderTile(provider: pr, agent: agent),
               const _Header("Custom providers"),
               if (agent.integrations.customProviders.isEmpty)
                 Padding(
@@ -120,6 +115,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
+              const _Header('Add provider'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: TextField(
+                  onChanged: (v) => setState(() => query = v),
+                  decoration: const InputDecoration(
+                    hintText: 'Search providers',
+                    prefixIcon: Icon(LucideIcons.search, size: 18),
+                  ),
+                ),
+              ),
+              for (final pr in others) _ProviderTile(provider: pr, agent: agent),
 
               const _Header('Environment'),
               _InfoRow('pi', agent.info['version']?.toString() ?? '—'),
