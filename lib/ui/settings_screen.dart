@@ -69,11 +69,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               for (final pr in others) _ProviderTile(provider: pr, agent: agent),
               const _Header("Custom providers"),
-              if (agent.customProviders.isEmpty)
+              if (agent.integrations.publicSettings().customProviders.isEmpty)
                 Padding
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                   child: Text("No custom providers configured.", style: text.bodySmall),
-              for (final cp in agent.customProviders)
+              for (final cp in agent.integrations.publicSettings().customProviders)
                 _CustomProviderTile(provider: cp, agent: agent),
 
               const _Header('Environment'),
@@ -234,7 +234,7 @@ class _CustomProviderTile extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Icon(LucideIcons.globe, size: 38, color: p.primary),
+      leading: Icon(LucideIcons.globe, size: 38, color: p.text),
       title: Text(provider['provider'] ?? 'Unknown', style: text.titleSmall),
       subtitle: Text('${provider['models']?.length ?? 0} models', style: text.bodySmall),
       trailing: provider['configured'] == true ? Icon(LucideIcons.check, color: p.success) : Icon(LucideIcons.chevronRight, size: 18, color: p.faint),
@@ -245,8 +245,7 @@ class _CustomProviderTile extends StatelessWidget {
   void _open(BuildContext context) async {
     // Show options for custom provider
     final providerName = provider['provider'] ?? 'Custom';
-    scaffold = ScaffoldMessenger.of(context);
-    scaffold.showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$providerName custom provider selected')),
     );
   }
