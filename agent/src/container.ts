@@ -255,6 +255,17 @@ interface Meta {
 	full?: boolean;
 }
 
+/** undici hides the useful part of "fetch failed" in `cause`. */
+function describeError(e: unknown) {
+	const err = e as any;
+	const cause = err?.cause;
+	return (
+		[err?.message, cause?.code, cause?.message, cause?.hostname ? `host ${cause.hostname}` : ""]
+			.filter(Boolean)
+			.join(" · ") || String(e)
+	);
+}
+
 export class Container {
 	private readonly root: string;
 	private readonly rootfs: string;
@@ -383,26 +394,72 @@ export class Container {
 	}
 
 	// -------------------------------------------------------------------------
-	// Docker Hub (anonymous pulls)
+	// Docker Hub (anonymous pulls), with Google's mirror as a fallback for
+	// networks where registry-1.docker.io or auth.docker.io is unreachable.
 
 	private token?: string;
+	private mirror = false;
 
-	private async registry(repo: string, path: string, accept?: string) {
-		if (!this.token) {
-			const res = await fetch(
-				`https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull`,
-			);
-			this.token = ((await res.json()) as any).token;
+	private async registry(repo: string, path: string, accept?: string): Promise<Response> {
+		const headers = accept ? { Accept: accept } : undefined;
+		const timeout = path.startsWith("blobs/") ? 300_000 : 45_000;
+		if (this.mirror) {
+			return this.fetchOk(`https://mirror.gcr.io/v2/${repo}/${path}`, { headers }, timeout, "Registry mirror");
 		}
-		const res = await fetch(`https://registry-1.docker.io/v2/${repo}/${path}`, {
-			headers: { Authorization: `Bearer ${this.token}`, ...(accept ? { Accept: accept } : {}) },
-		});
-		if (!res.ok) throw new Error(`Registry ${path}: ${res.status} ${res.statusText}`);
-		return res;
+		try {
+			if (!this.token) {
+				const auth = await this.fetchOk(
+					`https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull`,
+					undefined,
+					30_000,
+					"Docker Hub login",
+				);
+				this.token = ((await auth.json()) as any).token;
+				if (!this.token) throw new Error("Docker Hub login: empty token");
+			}
+			return await this.fetchOk(
+				`https://registry-1.docker.io/v2/${repo}/${path}`,
+				{ headers: { Authorization: `Bearer ${this.token}`, ...headers } },
+				timeout,
+				`Registry ${path}`,
+			);
+		} catch (e) {
+			// Docker Hub is blocked, rate-limited or the connection dropped:
+			// mirror.gcr.io serves the same content without authentication.
+			this.mirror = true;
+			this.token = undefined;
+			try {
+				return await this.registry(repo, path, accept);
+			} catch (m) {
+				throw new Error(`${describeError(e)}; mirror also failed: ${describeError(m)}`);
+			}
+		}
+	}
+
+	private async fetchOk(url: string, init: RequestInit | undefined, timeout: number, what: string) {
+		let last: unknown;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			let res: Response;
+			try {
+				res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
+			} catch (e) {
+				last = e;
+				await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+				continue;
+			}
+			if (res.ok) return res;
+			await res.body?.cancel().catch(() => {});
+			const error = new Error(`${what}: HTTP ${res.status} ${res.statusText}`);
+			if (res.status !== 429 && res.status < 500) throw error;
+			last = error;
+			await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+		}
+		throw new Error(`${what}: ${describeError(last)}`);
 	}
 
 	private async resolveLayers(repo: string, tag: string) {
 		this.token = undefined;
+		this.mirror = false;
 		const index = (await (
 			await this.registry(
 				repo,
@@ -432,18 +489,29 @@ export class Container {
 	}
 
 	private async extractLayer(repo: string, layer: { digest: string; size: number }, log: Log) {
-		const res = await this.registry(repo, `blobs/${layer.digest}`);
-		let received = 0;
-		let lastPct = -1;
-		const counted = Readable.fromWeb(res.body as any).on("data", (chunk: Buffer) => {
-			received += chunk.length;
-			const pct = Math.floor((received / layer.size) * 100);
-			if (pct >= lastPct + 10 || pct === 100) {
-				lastPct = pct;
-				log(`Downloading: ${pct}%`);
+		for (let attempt = 0; ; attempt++) {
+			try {
+				const res = await this.registry(repo, `blobs/${layer.digest}`);
+				let received = 0;
+				let lastPct = -1;
+				const counted = Readable.fromWeb(res.body as any).on("data", (chunk: Buffer) => {
+					received += chunk.length;
+					const pct = Math.floor((received / layer.size) * 100);
+					if (pct >= lastPct + 10 || pct === 100) {
+						lastPct = pct;
+						log(`Downloading: ${pct}%`);
+					}
+				});
+				await untar(counted.pipe(createGunzip()), this.rootfs);
+				return;
+			} catch (e) {
+				if (attempt > 0 || this.mirror) {
+					throw new Error(`Layer ${layer.digest.slice(0, 19)}… failed: ${describeError(e)}`);
+				}
+				log("Download interrupted; retrying through the registry mirror…");
+				this.mirror = true;
 			}
-		});
-		await untar(counted.pipe(createGunzip()), this.rootfs);
+		}
 	}
 
 	private configure(image: Image) {
