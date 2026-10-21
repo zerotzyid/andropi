@@ -199,14 +199,14 @@ class _SettingsHubState extends State<SettingsHub> {
               SettingsGroup(
                 children: [
                   SettingsRow(
-                    icon: c?.distro == 'alpine' ? SimpleIcons.alpinelinux : SimpleIcons.debian,
-                    color: c?.distro == 'alpine' ? const Color(0xFF0D597F) : const Color(0xFFD70A53),
+                    icon: containerDistroIcon(c?.distro),
+                    color: containerDistroColor(c?.distro),
                     title: tr('Linux container'),
                     subtitle: c == null
-                        ? 'Debian or Alpine with apt / apk'
+                        ? 'Debian, Ubuntu, Alpine, Kali and more'
                         : c.installed
-                        ? '${c.image}${c.enabled ? ' · agent shell' : ''}'
-                        : 'Not installed · run apt, pip, npm and more',
+                        ? '${c.distroLabel ?? c.image}${c.enabled ? ' · agent shell' : ''}'
+                        : 'Not installed · run apt, apk, dnf, zypper, pip and npm',
                     trailing: c?.enabled == true ? Pill('On', color: p.success, dot: true) : null,
                     onTap: () => _open(ContainerScreen(agent: agent)),
                   ),

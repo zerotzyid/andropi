@@ -9,34 +9,55 @@ import 'task_log.dart';
 import 'terminal_screen.dart';
 import 'theme.dart';
 
-class _Distro {
-  const _Distro(this.id, this.name, this.icon, this.color, this.blurb, this.size);
-  final String id;
-  final String name;
-  final IconData icon;
-  final Color color;
-  final String blurb;
-  final String size;
+/// Icon for a distro id (also used by the settings overview).
+IconData containerDistroIcon(String? id) {
+  if (id == null) return LucideIcons.container;
+  if (id.startsWith('ubuntu')) return SimpleIcons.ubuntu;
+  if (id.startsWith('debian')) return SimpleIcons.debian;
+  if (id.startsWith('alpine')) return SimpleIcons.alpinelinux;
+  if (id.startsWith('kali')) return SimpleIcons.kalilinux;
+  if (id.startsWith('fedora')) return SimpleIcons.fedora;
+  if (id.startsWith('opensuse')) return SimpleIcons.opensuse;
+  if (id.startsWith('rocky')) return SimpleIcons.rockylinux;
+  if (id.startsWith('alma')) return SimpleIcons.almalinux;
+  return LucideIcons.container;
 }
 
-const _distros = [
-  _Distro(
-    'debian',
-    'Debian',
-    SimpleIcons.debian,
-    Color(0xFFD70A53),
-    'apt, glibc. Best compatibility: pip wheels, Node native modules.',
-    '~30 MB',
-  ),
-  _Distro(
-    'alpine',
-    'Alpine',
-    SimpleIcons.alpinelinux,
-    Color(0xFF0D597F),
-    'apk, musl. Tiny and fast; some prebuilt binaries won\'t run.',
-    '~4 MB',
-  ),
-];
+Color containerDistroColor(String? id) {
+  if (id == null) return const Color(0xFF8B5CF6);
+  if (id.startsWith('ubuntu')) return const Color(0xFFE95420);
+  if (id.startsWith('debian')) return const Color(0xFFD70A53);
+  if (id.startsWith('alpine')) return const Color(0xFF0D597F);
+  if (id.startsWith('kali')) return const Color(0xFF557C94);
+  if (id.startsWith('fedora')) return const Color(0xFF51A2DA);
+  if (id.startsWith('opensuse')) return const Color(0xFF73BA25);
+  if (id.startsWith('rocky')) return const Color(0xFF10B981);
+  if (id.startsWith('alma')) return const Color(0xFF0F4266);
+  return const Color(0xFF8B5CF6);
+}
+
+/// One Docker image from the host's catalog (shown only for this device's CPU).
+class _Distro {
+  _Distro(this.json);
+  final Map<String, dynamic> json;
+
+  String get id => '${json['id']}';
+  String get name => '${json['label'] ?? json['id']}';
+  String get blurb => '${json['blurb'] ?? ''}';
+  String get size => '${json['size'] ?? ''}';
+  String get family => '${json['family'] ?? 'apt'}';
+
+  IconData get icon => containerDistroIcon(id);
+
+  Color get color => containerDistroColor(id);
+
+  String get hint => switch (family) {
+        'apk' => 'apk add python3 py3-pip nodejs npm build-base',
+        'dnf' => 'dnf install -y python3 nodejs npm gcc gcc-c++ make',
+        'zypper' => 'zypper install -y python3 nodejs npm gcc gcc-c++ make',
+        _ => 'apt-get update\napt-get install -y python3 python3-pip nodejs npm build-essential',
+      };
+}
 
 /// Install and manage the Linux userland the agent can use.
 class ContainerScreen extends StatefulWidget {
@@ -49,22 +70,34 @@ class ContainerScreen extends StatefulWidget {
 
 class _ContainerScreenState extends State<ContainerScreen> {
   Integrations get it => widget.agent.integrations;
-  String choice = 'debian';
+  String? choice;
+  bool full = true;
   bool switching = false;
 
   @override
   void initState() {
     super.initState();
-    it.refreshContainer().catchError((_) => it.container!);
+    _refresh();
   }
 
-  Future<void> _install() async {
-    final d = _distros.firstWhere((x) => x.id == choice);
+  Future<void> _refresh() async {
+    try {
+      final status = await it.refreshContainer();
+      if (!mounted) return;
+      if (choice == null && status.distros.isNotEmpty) {
+        setState(() => choice = _Distro(status.distros.first).id);
+      }
+    } catch (_) {
+      // The host may still be starting; the listenable will refresh it later.
+    }
+  }
+
+  Future<void> _install(_Distro d) async {
     final ok = await runWithLog<bool>(
       context,
       title: 'Installing ${d.name}',
       task: (log, _) async {
-        await it.installContainer(choice, onLine: log);
+        await it.installContainer(d.id, full: full, onLine: log);
         return true;
       },
     );
@@ -104,6 +137,14 @@ class _ContainerScreenState extends State<ContainerScreen> {
     await widget.agent.refreshState();
   }
 
+  _Distro? _selected(List<_Distro> distros, ContainerStatus c) {
+    final id = c.installed ? c.distro : choice;
+    for (final d in distros) {
+      if (d.id == id) return d;
+    }
+    return distros.isEmpty ? null : distros.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
@@ -112,8 +153,9 @@ class _ContainerScreenState extends State<ContainerScreen> {
       listenable: it,
       builder: (context, _) {
         final c = it.container;
+        final distros = c == null ? const <_Distro>[] : c.distros.map(_Distro.new).toList();
         final installed = c?.installed == true;
-        final d = _distros.firstWhere((x) => x.id == (c?.distro ?? choice), orElse: () => _distros.first);
+        final d = c == null ? null : _selected(distros, c);
         return Scaffold(
           appBar: AppBar(title: const Text('Linux container')),
           body: c == null
@@ -130,8 +172,8 @@ class _ContainerScreenState extends State<ContainerScreen> {
                           Row(
                             children: [
                               IconTile(
-                                icon: installed ? d.icon : LucideIcons.container,
-                                color: installed ? d.color : p.accent,
+                                icon: installed && d != null ? d.icon : LucideIcons.container,
+                                color: installed && d != null ? d.color : p.accent,
                                 size: 48,
                               ),
                               const SizedBox(width: 14),
@@ -139,10 +181,15 @@ class _ContainerScreenState extends State<ContainerScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(installed ? d.name : 'Real Linux on your phone', style: text.titleMedium),
+                                    Text(
+                                      installed ? (c.distroLabel ?? d?.name ?? 'Linux') : 'Real Linux on your phone',
+                                      style: text.titleMedium,
+                                    ),
                                     const SizedBox(height: 3),
                                     Text(
-                                      installed ? c.image ?? '' : 'Install packages with apt or apk',
+                                      installed
+                                          ? '${c.image ?? ''} · ${c.archLabel}${c.full ? ' · full tools' : ''}'
+                                          : 'Images compatible with ${c.archLabel}',
                                       style: TextStyle(
                                         fontFamily: installed ? mono : null,
                                         fontSize: 12.5,
@@ -162,28 +209,50 @@ class _ContainerScreenState extends State<ContainerScreen> {
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            'Runs through proot: no root or Termux needed. Your home folder and workspace are the same '
-                            'paths inside, so the agent can `apt install python3 nodejs` and work on your files directly.',
+                            installed
+                                ? 'Runs through proot: no root or Termux needed. Your home folder and workspace are the same '
+                                    'paths inside, so the agent can use its package manager and work on your files directly.'
+                                : 'Runs through proot: no root or Termux needed. Pick any distribution; only images with an '
+                                    'official build for your CPU are listed.',
                             style: text.bodySmall,
                           ),
                         ],
                       ),
                     ),
                     if (!installed) ...[
-                      const SectionLabel('Choose a distribution'),
-                      for (final x in _distros) ...[
-                        _DistroCard(distro: x, selected: choice == x.id, onTap: () => setState(() => choice = x.id)),
+                      SectionLabel('Choose a distribution · ${c.archLabel}'),
+                      if (distros.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                          child: Text('No container images are available for this CPU.', style: text.bodySmall),
+                        ),
+                      for (final x in distros) ...[
+                        _DistroCard(distro: x, selected: d?.id == x.id, onTap: () => setState(() => choice = x.id)),
                         const SizedBox(height: 10),
                       ],
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
+                      const SectionLabel('Packages'),
+                      SettingsGroup(
+                        children: [
+                          SettingsRow(
+                            icon: LucideIcons.package,
+                            color: p.accentAlt,
+                            title: 'Full developer tools',
+                            subtitle: 'Python, Node.js, compilers and CLIs (like Termux; adds up to ~1 GB)',
+                            trailing: Switch(value: full, onChanged: (v) => setState(() => full = v)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
                       PrimaryButton(
-                        label: 'Install ${_distros.firstWhere((x) => x.id == choice).name}',
+                        label: 'Install ${d?.name ?? 'Linux'}',
                         icon: LucideIcons.download,
-                        onPressed: _install,
+                        onPressed: d == null ? null : () => _install(d),
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Downloads the official image from Docker Hub, then installs git, curl, ssh and certificates.',
+                        'Downloads ${d?.name ?? 'the image'} from Docker Hub for ${c.archLabel}, then installs '
+                        '${full ? 'the full toolset.' : 'git, curl, ssh and certificates.'}',
                         textAlign: TextAlign.center,
                         style: text.bodySmall,
                       ),
@@ -196,7 +265,7 @@ class _ContainerScreenState extends State<ContainerScreen> {
                             color: p.accent,
                             title: 'Use as the agent\'s shell',
                             subtitle: c.enabled
-                                ? 'Every command pi runs happens inside ${d.name}'
+                                ? 'Every command pi runs happens inside ${c.distroLabel ?? 'Linux'}'
                                 : 'pi uses the Android shell; `box` still reaches Linux',
                             trailing: switching
                                 ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
@@ -219,9 +288,7 @@ class _ContainerScreenState extends State<ContainerScreen> {
                       SurfaceCard(
                         padding: const EdgeInsets.all(14),
                         child: SelectableText(
-                          d.id == 'alpine'
-                              ? 'apk add python3 py3-pip nodejs npm build-base'
-                              : 'apt-get update\napt-get install -y python3 python3-pip nodejs npm build-essential',
+                          d?.hint ?? 'apt-get update',
                           style: TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.6, color: p.text),
                         ),
                       ),
@@ -270,7 +337,7 @@ class _DistroCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(distro.name, style: text.titleSmall),
+                    Flexible(child: Text(distro.name, style: text.titleSmall)),
                     const SizedBox(width: 8),
                     Text(
                       distro.size,

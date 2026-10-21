@@ -803,7 +803,7 @@ async function handle(cmd: Command): Promise<unknown> {
 		case "container_status":
 			return container.status(settingsManager.getShellPath());
 		case "container_install": {
-			await container.install(cmd.distro as Distro, taskLog(cmd), integrations.settings.dns);
+			await container.install(cmd.distro as Distro, taskLog(cmd), integrations.settings.dns, cmd.full === true);
 			// On by default once installed, unless the user turned it off before.
 			if (integrations.settings.containerShell !== false) {
 				settingsManager.setShellPath(container.shellPath);

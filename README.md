@@ -18,7 +18,7 @@ Write, run, preview and deploy code without a laptop.</p>
 </p>
 
 AndroPI puts the [pi coding agent](https://github.com/earendil-works/pi) on Android. The agent runs locally in a
-bundled Node.js runtime. It reads and writes files, runs shell commands in a real Debian or Alpine container,
+bundled Node.js runtime. It reads and writes files, runs shell commands in a real Linux container,
 searches the web, and ships your project to GitHub Pages, Vercel or your own server. You bring the model:
 Anthropic, OpenAI, Gemini, OpenRouter and the other providers pi supports.
 
@@ -26,8 +26,9 @@ Anthropic, OpenAI, Gemini, OpenRouter and the other providers pi supports.
 
 - **Chat with a coding agent.** Replies stream in real time, with code blocks, tool calls and a live HTML
   preview that updates while the agent writes the page.
-- **Linux container.** Debian or Alpine through proot, so `apt`, `pip` and `npm` work. It is on by default and is
-  the agent's shell.
+- **Linux container.** Debian, Ubuntu, Alpine, Kali, openSUSE, Fedora and RHEL-family images through proot, so
+  `apt`, `apk`, `dnf`, `zypper`, `pip` and `npm` work. Images are pulled for the phone's CPU (including armv7
+  on 32-bit devices), and an optional full toolset adds Python, Node.js, compilers and common CLIs.
 - **Projects.** Each chat can use its own folder, or you can open any folder on the phone. The app includes a file
   explorer, a code editor, project search, a diff view and a checkpoint/undo for every agent run.
 - **Git and GitHub.** Sign in with GitHub's device code, then clone repositories, commit, push, pick branches,

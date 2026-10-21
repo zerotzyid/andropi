@@ -1,31 +1,38 @@
 ---
 name: linux-container
-description: Install and run Linux software (Python, Node.js, compilers, databases, CLIs) on this Android phone through AndroPI's Debian/Alpine container. Use whenever a task needs a package, runtime or tool that is not already on PATH, or when a command fails with "not found".
+description: Install and run Linux software (Python, Node.js, compilers, databases, CLIs) on this Android phone through AndroPI's Linux container (Debian, Ubuntu, Alpine, Kali, openSUSE, Fedora or RHEL-family). Use whenever a task needs a package, runtime or tool that is not already on PATH, or when a command fails with "not found".
 ---
 
 # Linux container
 
-AndroPI can run a real Linux userland (Debian or Alpine) through proot. The
-home folder and workspace are mounted at the same paths inside, so files you
-create in either place are the same files.
+AndroPI can run a real Linux userland through proot. The app offers images for
+32-bit armv7 phones as well as 64-bit arm64 phones: Debian, Ubuntu, Alpine,
+Kali, openSUSE Tumbleweed and, on 64-bit devices, Fedora, AlmaLinux, Rocky
+Linux, Amazon Linux, openSUSE Leap and Oracle Linux. The home folder and
+workspace are mounted at the same paths inside, so files you create in either
+place are the same files.
 
 ## Check what you have
 
 ```sh
-command -v apt-get && echo debian-shell   # your shell is already inside Debian
-command -v apk && echo alpine-shell       # already inside Alpine
-command -v box && box -c 'cat /etc/os-release | head -1'   # container exists, you are outside
+cat /etc/os-release | head -1          # which distribution is active
+command -v apt-get && echo apt-shell   # Debian, Ubuntu or Kali
+command -v apk && echo alpine-shell    # Alpine
+command -v dnf && echo rhel-shell      # Fedora, Alma, Rocky, Amazon or Oracle
+command -v zypper && echo suse-shell   # openSUSE
+command -v box && box -c 'uname -m'    # container exists, you are outside
 ```
 
-- If `apt-get` or `apk` works directly, every command already runs inside the
-  container. Install with `apt-get install -y <pkg>` or `apk add <pkg>`.
+- If a package manager works directly, every command already runs inside the
+  container. Install with `apt-get install -y <pkg>`, `apk add <pkg>`,
+  `dnf install -y <pkg>` or `zypper install -y <pkg>`.
 - If only `box` works, run Linux commands as `box -c '<command>'`.
 - If `box` prints "not installed", tell the user to install it in
   AndroPI under Settings → Linux container. Do not try to install it yourself.
 
 ## Installing things
 
-Debian:
+Debian / Ubuntu / Kali:
 
 ```sh
 apt-get update                    # once per session before the first install
@@ -33,6 +40,12 @@ apt-get install -y python3 python3-pip python3-venv nodejs npm build-essential
 ```
 
 Alpine: `apk add python3 py3-pip nodejs npm build-base`.
+
+Fedora / Alma / Rocky / Amazon / Oracle: `dnf install -y python3 nodejs npm gcc gcc-c++ make`.
+openSUSE: `zypper install -y python3 nodejs npm gcc gcc-c++ make`.
+
+The installer's **Full developer tools** option already adds Python, Node.js,
+compilers, git, curl, wget, ripgrep, tmux and common CLIs to a new container.
 
 - Python: Debian marks the system Python as externally managed. Use a venv
   (`python3 -m venv .venv && . .venv/bin/activate && pip install ...`) or

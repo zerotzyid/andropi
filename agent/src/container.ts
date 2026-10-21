@@ -1,8 +1,10 @@
 /**
- * A Linux userland for the agent: an official Debian or Alpine image pulled
- * from Docker Hub, unpacked into app storage and entered through proot
- * (tool/box.sh, on PATH as `box`). With it enabled, pi's bash tool runs inside,
- * so `apt install nodejs python3` just works.
+ * A Linux userland for the agent: an official Debian, Ubuntu, Alpine, Kali,
+ * openSUSE, Fedora or RHEL-family image pulled from Docker Hub, unpacked into
+ * app storage and entered through proot (tool/box.sh, on PATH as `box`). With
+ * it enabled, pi's bash tool runs inside, so `apt install nodejs python3` just
+ * works. Images are selected for the ABI the APK was installed for, including
+ * linux/arm/v7 on 32-bit phones.
  */
 
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -12,32 +14,245 @@ import { Readable } from "node:stream";
 import { NAMESERVERS, type DnsMode } from "./dns.js";
 import { type Log, run } from "./integrations.js";
 
-export type Distro = "debian" | "alpine";
+export type Distro = string;
+
+type Cpu = "armv7" | "arm64" | "amd64" | "x86";
+type Family = "apt" | "apk" | "dnf" | "zypper";
+
+interface Platform {
+	abi: string;
+	cpu: Cpu;
+	bits: 32 | 64;
+	label: string;
+	/** Docker platform matchers, most specific first (armv7 falls back to armv6). */
+	candidates: { architecture: string; variant?: string }[];
+}
 
 /** The Docker platform matching this phone's CPU (node reports the ABI the APK was installed for). */
-const PLATFORM =
+const PLATFORM: Platform =
 	process.arch === "arm"
-		? { architecture: "arm", variant: "v7", label: "linux/arm/v7" }
-		: process.arch === "x64"
-			? { architecture: "amd64", variant: undefined, label: "linux/amd64" }
-			: { architecture: "arm64", variant: undefined, label: "linux/arm64" };
+		? {
+				abi: "armeabi-v7a",
+				cpu: "armv7",
+				bits: 32,
+				label: "armv7 (32-bit)",
+				candidates: [
+					{ architecture: "arm", variant: "v7" },
+					{ architecture: "arm", variant: "v6" },
+				],
+			}
+		: process.arch === "ia32"
+			? {
+					abi: "x86",
+					cpu: "x86",
+					bits: 32,
+					label: "x86 (32-bit)",
+					candidates: [{ architecture: "386" }],
+				}
+			: process.arch === "x64"
+				? {
+						abi: "x86_64",
+						cpu: "amd64",
+						bits: 64,
+						label: "x86_64 (64-bit)",
+						candidates: [{ architecture: "amd64" }, { architecture: "x86_64" }],
+					}
+				: {
+						abi: "arm64-v8a",
+						cpu: "arm64",
+						bits: 64,
+						label: "arm64 (64-bit)",
+						candidates: [{ architecture: "arm64" }],
+					};
 
-const IMAGES: Record<Distro, { repo: string; tag: string; label: string }> = {
-	debian: { repo: "library/debian", tag: "stable-slim", label: "Debian (stable, slim)" },
-	alpine: { repo: "library/alpine", tag: "latest", label: "Alpine Linux" },
+interface Image {
+	repo: string;
+	tag: string;
+	label: string;
+	family: Family;
+	/** CPUs with an official image; 64-bit-only images are hidden on 32-bit phones. */
+	arches: Cpu[];
+	blurb: string;
+	size: string;
+}
+
+/**
+ * Official Docker Hub images with a working package manager. Everything except
+ * the entries marked below ships linux/arm/v7, so 32-bit phones get the same
+ * choice as 64-bit ones.
+ */
+const IMAGES: Record<string, Image> = {
+	debian: {
+		repo: "library/debian",
+		tag: "stable-slim",
+		label: "Debian 13 (stable)",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "apt + glibc. Best compatibility for pip wheels and Node native modules.",
+		size: "~27 MB",
+	},
+	"debian-12": {
+		repo: "library/debian",
+		tag: "bookworm-slim",
+		label: "Debian 12 (bookworm)",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "Older stable release; a safe fallback for old armv7 kernels.",
+		size: "~24 MB",
+	},
+	"debian-11": {
+		repo: "library/debian",
+		tag: "bullseye-slim",
+		label: "Debian 11 (bullseye)",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "Legacy stable; use when newer glibc does not start on your device.",
+		size: "~26 MB",
+	},
+	"ubuntu-24.04": {
+		repo: "library/ubuntu",
+		tag: "24.04",
+		label: "Ubuntu 24.04 LTS",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64"],
+		blurb: "Newest LTS. Huge apt catalog and long security support.",
+		size: "~27 MB",
+	},
+	"ubuntu-22.04": {
+		repo: "library/ubuntu",
+		tag: "22.04",
+		label: "Ubuntu 22.04 LTS",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64"],
+		blurb: "Widely used LTS; most tutorials and PPAs target this release.",
+		size: "~27 MB",
+	},
+	"ubuntu-20.04": {
+		repo: "library/ubuntu",
+		tag: "20.04",
+		label: "Ubuntu 20.04 LTS",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64"],
+		blurb: "Older LTS for legacy software and low-memory phones.",
+		size: "~24 MB",
+	},
+	alpine: {
+		repo: "library/alpine",
+		tag: "latest",
+		label: "Alpine Linux",
+		family: "apk",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "apk + musl. Tiny and fast; some prebuilt binaries will not run.",
+		size: "~4 MB",
+	},
+	kali: {
+		repo: "kalilinux/kali-rolling",
+		tag: "latest",
+		label: "Kali Linux Rolling",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "Security tooling on Debian testing; add tools with apt.",
+		size: "~49 MB",
+	},
+	"kali-last": {
+		repo: "kalilinux/kali-last-release",
+		tag: "latest",
+		label: "Kali Linux (last release)",
+		family: "apt",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "Kali's most recent stable snapshot, one release behind rolling.",
+		size: "~49 MB",
+	},
+	"opensuse-tumbleweed": {
+		repo: "opensuse/tumbleweed",
+		tag: "latest",
+		label: "openSUSE Tumbleweed",
+		family: "zypper",
+		arches: ["armv7", "arm64", "amd64", "x86"],
+		blurb: "Rolling release with zypper and YaST; includes armv7 images.",
+		size: "~36 MB",
+	},
+	fedora: {
+		repo: "library/fedora",
+		tag: "latest",
+		label: "Fedora Linux",
+		family: "dnf",
+		arches: ["arm64", "amd64"],
+		blurb: "Current Fedora with dnf. 64-bit devices only (no armv7 image).",
+		size: "~66 MB",
+	},
+	"almalinux-9": {
+		repo: "library/almalinux",
+		tag: "9",
+		label: "AlmaLinux 9",
+		family: "dnf",
+		arches: ["arm64", "amd64"],
+		blurb: "RHEL-compatible enterprise base. 64-bit only.",
+		size: "~71 MB",
+	},
+	"rocky-9": {
+		repo: "library/rockylinux",
+		tag: "9",
+		label: "Rocky Linux 9",
+		family: "dnf",
+		arches: ["arm64", "amd64"],
+		blurb: "RHEL-compatible enterprise base. 64-bit only.",
+		size: "~64 MB",
+	},
+	"amazonlinux-2023": {
+		repo: "library/amazonlinux",
+		tag: "2023",
+		label: "Amazon Linux 2023",
+		family: "dnf",
+		arches: ["arm64", "amd64"],
+		blurb: "AWS's supported base image. 64-bit only.",
+		size: "~54 MB",
+	},
+	"opensuse-leap": {
+		repo: "opensuse/leap",
+		tag: "latest",
+		label: "openSUSE Leap",
+		family: "zypper",
+		arches: ["arm64", "amd64"],
+		blurb: "Stable SUSE base with zypper. 64-bit only.",
+		size: "~41 MB",
+	},
+	"oraclelinux-9": {
+		repo: "library/oraclelinux",
+		tag: "9",
+		label: "Oracle Linux 9",
+		family: "dnf",
+		arches: ["arm64", "amd64"],
+		blurb: "RHEL-compatible base from Oracle. 64-bit only.",
+		size: "~92 MB",
+	},
 };
 
 /** Installed right after unpacking so git, curl and TLS work from the start. */
-const BASE_PACKAGES: Record<Distro, string> = {
-	debian:
-		"apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client less procps",
-	alpine: "apk add --no-cache bash ca-certificates curl git openssh-client less",
+const BASE_PACKAGES: Record<Family, string> = {
+	apt: "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client less procps",
+	apk: "apk update && apk add --no-cache bash ca-certificates curl git openssh-client less procps",
+	dnf: "dnf -y install ca-certificates curl git openssh-clients less procps-ng",
+	zypper:
+		"zypper --non-interactive --gpg-auto-import-keys refresh && zypper --non-interactive --auto-agree-with-licenses install ca-certificates curl git openssh less procps",
+};
+
+/** Optional "Termux-like" toolbox installed when the user ticks Full packages. */
+const FULL_PACKAGES: Record<Family, string> = {
+	apt:
+		"apt-get install -y --no-install-recommends build-essential python3 python3-pip python3-venv nodejs npm wget unzip zip xz-utils jq ripgrep fd-find htop tmux nano vim-tiny",
+	apk: "apk add --no-cache build-base python3 py3-pip nodejs npm wget unzip zip xz jq ripgrep fd htop tmux nano vim",
+	dnf:
+		"dnf -y install gcc gcc-c++ make python3 python3-pip nodejs npm wget unzip zip xz jq htop tmux nano vim-minimal",
+	zypper:
+		"zypper --non-interactive --auto-agree-with-licenses install gcc gcc-c++ make python3 python3-pip nodejs npm wget unzip zip xz jq ripgrep fd htop tmux nano vim",
 };
 
 interface Meta {
 	distro: Distro;
 	image: string;
 	installedAt: number;
+	full?: boolean;
 }
 
 export class Container {
@@ -70,10 +285,22 @@ export class Container {
 		return {
 			installed,
 			distro: installed ? meta!.distro : null,
+			distroLabel: installed ? (IMAGES[meta!.distro]?.label ?? meta!.distro) : null,
 			image: installed ? meta!.image : null,
 			installedAt: installed ? meta!.installedAt : null,
+			full: installed ? meta!.full === true : false,
 			enabled: installed && currentShell === this.shellPath,
-			distros: Object.entries(IMAGES).map(([id, i]) => ({ id, label: i.label })),
+			platform: { arch: PLATFORM.cpu, bits: PLATFORM.bits, label: PLATFORM.label, abi: PLATFORM.abi },
+			distros: Object.entries(IMAGES)
+				.filter(([, i]) => i.arches.includes(PLATFORM.cpu))
+				.map(([id, i]) => ({
+					id,
+					label: i.label,
+					blurb: i.blurb,
+					size: i.size,
+					family: i.family,
+					image: `${i.repo.replace("library/", "")}:${i.tag}`,
+				})),
 		};
 	}
 
@@ -85,9 +312,12 @@ export class Container {
 		writeFileSync(join(etc, "resolv.conf"), NAMESERVERS[mode].map((ip) => `nameserver ${ip}`).join("\n") + "\n");
 	}
 
-	async install(distro: Distro, log: Log, dns: DnsMode = "cloudflare") {
+	async install(distro: Distro, log: Log, dns: DnsMode = "cloudflare", full = false) {
 		const image = IMAGES[distro];
 		if (!image) throw new Error(`Unknown distro: ${distro}`);
+		if (!image.arches.includes(PLATFORM.cpu)) {
+			throw new Error(`${image.label} has no ${PLATFORM.label} image. Use a 64-bit build for this distribution.`);
+		}
 		rmSync(this.rootfs, { recursive: true, force: true });
 		rmSync(this.metaFile, { force: true });
 		mkdirSync(this.rootfs, { recursive: true });
@@ -100,17 +330,51 @@ export class Container {
 		}
 
 		log("Configuring…");
-		this.configure(distro);
+		this.configure(image);
 		this.setNameservers(dns);
-		writeFileSync(
-			this.metaFile,
-			JSON.stringify({ distro, image: `${image.repo.replace("library/", "")}:${image.tag}`, installedAt: Date.now() }),
-		);
+
+		// proot itself must work before package managers are worth trying.
+		try {
+			await run("box", ["-c", "true"], { cwd: process.env.HOME ?? "/", log });
+		} catch (e) {
+			this.remove();
+			throw new Error(`The ${PLATFORM.label} container could not start: ${String((e as Error)?.message ?? e)}`);
+		}
 
 		log("Installing base tools (git, curl, ssh, certificates)…");
-		await run("box", ["-c", BASE_PACKAGES[distro]], { cwd: process.env.HOME ?? "/", log });
+		if (!(await this.packages(BASE_PACKAGES[image.family], log))) {
+			log("Warning: some base packages failed; open a shell and retry the package manager.");
+		}
+		let fullInstalled = false;
+		if (full) {
+			log("Installing full developer tools (this can take a while)…");
+			fullInstalled = await this.packages(FULL_PACKAGES[image.family], log);
+			if (!fullInstalled) {
+				log("Warning: some optional packages were unavailable for this distribution.");
+			}
+		}
+		writeFileSync(
+			this.metaFile,
+			JSON.stringify({
+				distro,
+				image: `${image.repo.replace("library/", "")}:${image.tag}`,
+				installedAt: Date.now(),
+				full: fullInstalled,
+			}),
+		);
 		log("Container ready");
 		return this.status(undefined);
+	}
+
+	/** Runs a package-manager command; failures are reported in the log, not fatal. */
+	private async packages(command: string, log: Log) {
+		try {
+			await run("box", ["-c", command], { cwd: process.env.HOME ?? "/", log });
+			return true;
+		} catch (e) {
+			log(String((e as Error)?.message ?? e));
+			return false;
+		}
 	}
 
 	remove() {
@@ -146,13 +410,17 @@ export class Container {
 				"application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
 			)
 		).json()) as any;
-		const arm = (index.manifests ?? []).find(
-			(m: any) =>
-				m.platform?.os === "linux" &&
-				m.platform?.architecture === PLATFORM.architecture &&
-				(!PLATFORM.variant || m.platform?.variant === PLATFORM.variant),
-		);
-		if (!arm) throw new Error(`No ${PLATFORM.label} image available`);
+		let arm: any;
+		for (const c of PLATFORM.candidates) {
+			arm = (index.manifests ?? []).find(
+				(m: any) =>
+					m.platform?.os === "linux" &&
+					m.platform?.architecture === c.architecture &&
+					(!c.variant || m.platform?.variant === c.variant),
+			);
+			if (arm) break;
+		}
+		if (!arm) throw new Error(`No image for ${PLATFORM.label} (tried ${PLATFORM.candidates.map((c) => c.architecture + (c.variant ? "/" + c.variant : "")).join(", ")})`);
 		const manifest = (await (
 			await this.registry(
 				repo,
@@ -178,7 +446,7 @@ export class Container {
 		await untar(counted.pipe(createGunzip()), this.rootfs);
 	}
 
-	private configure(distro: Distro) {
+	private configure(image: Image) {
 		const etc = join(this.rootfs, "etc");
 		mkdirSync(etc, { recursive: true });
 		// Replace (not follow) whatever the image ships: often a symlink to /run.
@@ -192,7 +460,7 @@ export class Container {
 		const tmp = join(this.rootfs, "tmp");
 		mkdirSync(tmp, { recursive: true });
 		chmodSync(tmp, 0o1777);
-		if (distro === "debian") {
+		if (image.family === "apt") {
 			// apt drops privileges to _apt for downloads; under proot that user can't write.
 			mkdirSync(join(etc, "apt/apt.conf.d"), { recursive: true });
 			writeFileSync(
@@ -269,11 +537,22 @@ async function untar(stream: AsyncIterable<Buffer>, dest: string) {
 		longName = longLink = null;
 		pax = {};
 
-		// OCI whiteouts only matter across layers; these images are single-layer.
+		// OCI whiteouts remove entries inherited from lower layers.
 		const base = name.split("/").pop() ?? "";
-		if (base.startsWith(".wh.")) continue;
 		const path = safe(name);
 		if (!path) continue;
+		if (base === ".wh..wh..opq") {
+			const dir = safe(name.slice(0, -base.length));
+			if (dir) {
+				rmSync(dir, { recursive: true, force: true });
+				mkdirSync(dir, { recursive: true });
+			}
+			continue;
+		}
+		if (base.startsWith(".wh.")) {
+			rmSync(join(dirname(path), base.slice(4)), { recursive: true, force: true });
+			continue;
+		}
 		mkdirSync(dirname(path), { recursive: true });
 
 		switch (type) {

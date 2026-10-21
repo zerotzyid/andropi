@@ -52,10 +52,18 @@ class ContainerStatus {
   bool get installed => json['installed'] == true;
   bool get enabled => json['enabled'] == true;
   String? get distro => json['distro'] as String?;
+  String? get distroLabel => json['distroLabel'] as String?;
   String? get image => json['image'] as String?;
-  List<(String, String)> get distros => [
-    for (final d in (json['distros'] as List? ?? const [])) ((d as Map)['id'] as String, d['label'] as String),
-  ];
+  bool get full => json['full'] == true;
+  String get archLabel => (json['platform'] as Map?)?['label'] as String? ?? 'this device';
+  String get abi => (json['platform'] as Map?)?['abi'] as String? ?? '';
+  List<Map<String, dynamic>> get distros {
+    final out = <Map<String, dynamic>>[];
+    for (final d in (json['distros'] as List? ?? const [])) {
+      out.add((d as Map).cast<String, dynamic>());
+    }
+    return out;
+  }
 }
 class SkillInfo {
   SkillInfo(this.json);
@@ -240,8 +248,8 @@ class Integrations extends ChangeNotifier {
     notifyListeners();
     return container!;
   }
-  Future<void> installContainer(String distro, {void Function(String)? onLine}) async {
-    await _task('container_install', {'distro': distro}, onLine);
+  Future<void> installContainer(String distro, {bool full = false, void Function(String)? onLine}) async {
+    await _task('container_install', {'distro': distro, 'full': full}, onLine);
     await refreshContainer();
   }
   Future<void> removeContainer() async {
